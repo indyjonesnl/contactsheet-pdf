@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pro Contact Sheet Generator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        :root { --primary: #3b82f6; --bg: #0f172a; --card: #1e293b; --text: #f8fafc; }
+        body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 2rem; display: flex; flex-direction: column; align-items: center; }
+        .container { max-width: 800px; width: 100%; background: var(--card); padding: 2rem; border-radius: 12px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); }
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem; }
+        .control-group { display: flex; flex-direction: column; gap: 0.5rem; }
+        label { font-size: 0.875rem; font-weight: 600; color: #94a3b8; }
+        input { padding: 0.6rem; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: white; }
+        .upload-area { border: 2px dashed #334155; padding: 2rem; text-align: center; border-radius: 8px; cursor: pointer; transition: border-color 0.2s; margin-bottom: 1rem; }
+        .upload-area:hover { border-color: var(--primary); }
+        .btn { background: var(--primary); color: white; border: none; padding: 0.8rem 1.5rem; border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; font-size: 1rem; }
+        .btn:disabled { background: #334155; cursor: not-allowed; }
+        #status { margin-top: 1rem; font-size: 0.9rem; text-align: center; color: #94a3b8; }
+        .preview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 10px; margin-top: 2rem; }
+        .preview-grid img { width: 100%; height: 80px; object-fit: cover; border-radius: 4px; border: 1px solid #334155; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 style="margin-top:0">📸 Contact Sheet Maker</h2>
+
+    <div class="controls">
+        <div class="control-group">
+            <label>Images per Page</label>
+            <input type="number" id="imgsPerPage" value="9" min="1" max="100">
+        </div>
+        <div class="control-group">
+            <label>Margin (mm)</label>
+            <input type="number" id="margin" value="10" min="0" max="50">
+        </div>
+    </div>
+
+    <div class="upload-area" id="dropZone">
+        Click or Drag & Drop Images Here
+        <input type="file" id="fileInput" multiple accept="image/*" style="display:none">
+    </div>
+
+    <button class="btn" id="downloadBtn" disabled>Generate PDF</button>
+    <div id="status">No images uploaded</div>
+    <div class="preview-grid" id="preview"></div>
+</div>
+
+<script>
+    const { jsPDF } = window.jspdf;
+    let imageFiles = [];
+
+    const fileInput = document.getElementById('fileInput');
+    const dropZone = document.getElementById('dropZone');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const status = document.getElementById('status');
+    const preview = document.getElementById('preview');
+
+    dropZone.onclick = () => fileInput.click();
+
+    fileInput.onchange = (e) => handleFiles(e.target.files);
+
+    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = "#3b82f6"; };
+    dropZone.ondragleave = () => { dropZone.style.borderColor = "#334155"; };
+    dropZone.ondrop = (e) => {
+        e.preventDefault();
+        handleFiles(e.dataTransfer.files);
+    };
+
+    function handleFiles(files) {
+        const validFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+        imageFiles = [...imageFiles, ...validFiles];
+
+        status.innerText = `${imageFiles.length} images loaded`;
+        downloadBtn.disabled = imageFiles.length === 0;
+
+        preview.innerHTML = '';
+        imageFiles.slice(0, 20).forEach(file => {
+            const img = document.createElement('img');
+            img.src = URL.createObjectURL(file);
+            preview.appendChild(img);
+        });
+        if(imageFiles.length > 20) status.innerText += " (showing first 20 previews)";
+    }
+
+    async function generatePDF() {
+        const imgsPerPage = parseInt(document.getElementById('imgsPerPage').value);
+        const margin = parseInt(document.getElementById('margin').value);
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+
+        // Use a smaller internal gutter (e.g., half the page margin)
+        // to ensure images don't touch.
+        const gutter = margin / 2;
+
+        // Calculate columns and rows for Option B (Best Fit)
+        const cols = Math.ceil(Math.sqrt(imgsPerPage));
+        const rows = Math.ceil(imgsPerPage / cols);
+
+        // Calculate the size of each "cell" including the outer page margins
+        const cellWidth = (pageWidth - (margin * 2)) / cols;
+        const cellHeight = (pageHeight - (margin * 2)) / rows;
+
+        for (let i = 0; i < imageFiles.length; i++) {
+            if (i > 0 && i % imgsPerPage === 0) pdf.addPage();
+
+            const imgData = await readFileAsDataURL(imageFiles[i]);
+            const imgProps = pdf.getImageProperties(imgData);
+
+            const pageIndex = i % imgsPerPage;
+            const col = pageIndex % cols;
+            const row = Math.floor(pageIndex / cols);
+
+            // Subtract the gutter from the cell size so images never touch
+            const maxWidth = cellWidth - gutter;
+            const maxHeight = cellHeight - gutter;
+
+            // Maintain Aspect Ratio within the padded slot
+            const ratio = Math.min(maxWidth / imgProps.width, maxHeight / imgProps.height);
+            const w = imgProps.width * ratio;
+            const h = imgProps.height * ratio;
+
+            // Center the image within its specific cell
+            const x = margin + (col * cellWidth) + (cellWidth - w) / 2;
+            const y = margin + (row * cellHeight) + (cellHeight - h) / 2;
+
+            pdf.addImage(imgData, 'JPEG', x, y, w, h, undefined, 'FAST');
+
+            // Optional: Progress update
+            if (i % 5 === 0) {
+                status.innerText = `Processing: ${Math.round((i/imageFiles.length)*100)}%`;
+            }
+        }
+
+        pdf.save('contact-sheet.pdf');
+        status.innerText = "Download Complete!";
+        downloadBtn.disabled = false;
+    }
+
+    function readFileAsDataURL(file) {
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.readAsDataURL(file);
+        });
+    }
+
+    downloadBtn.onclick = generatePDF;
+</script>
+
+</body>
+</html>
